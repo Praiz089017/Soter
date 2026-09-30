@@ -1,0 +1,40 @@
+# Core field flow: scan a valid Soter QR code.
+#
+# The emulator has no way to present a physical QR code to the camera, so
+# the E2E build exposes a "simulate scan" control (ScannerScreen,
+# gated by EXPO_PUBLIC_E2E=1) that feeds a real `soter://package/...`
+# payload through the exact same `handleBarCodeScanned` handler a camera
+# hit would. That exercises QR parsing, de-duplication and navigation; only
+# the camera hardware itself is skipped.
+appId: org.pulsefy.soter.mobile
+name: scan-valid-qr
+tags:
+  - e2e
+  - scan
+---
+- launchApp:
+    clearState: true
+
+# Home → Scanner.
+- assertVisible:
+    id: "scan-fab"
+- tapOn:
+    id: "scan-fab"
+
+# Scanner mounts and (with camera permission pre-granted by the harness)
+# shows the viewfinder. Wait past the permission-check state.
+- extendedWaitUntil:
+    visible:
+      id: "e2e-simulate-scan"
+    timeout: 30000
+- assertVisible: "Align QR code within the frame"
+
+# Drive a valid package QR through the real scan handler.
+- tapOn:
+    id: "e2e-simulate-scan"
+
+# A valid QR replaces the scanner with the aid details screen, which loads
+# from the deterministic E2E backend.
+- extendedWaitUntil:
+    visible: "E2E Emergency Food Supply"
+    timeout: 30000
