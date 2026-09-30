@@ -46,8 +46,8 @@ without an emulator (the same split used by the cold-start tooling in
 
 A headless emulator cannot produce a physical QR code for the camera or
 drive the native camera/photo picker. Rather than skip scanning and
-evidence capture, the harness builds the app with `EXPO_PUBLIC_E2E=1`,
-which makes two deterministic controls visible:
+evidence capture, the harness builds the app with the E2E build switch
+flipped, which makes two deterministic controls visible:
 
 - `ScannerScreen` — `e2e-simulate-scan` feeds a real
   `soter://package/E2E-AID-1` payload through the same
@@ -56,10 +56,22 @@ which makes two deterministic controls visible:
 - `EvidenceUploadScreen` — `e2e-simulate-capture` feeds a bundled 1×1 JPEG
   through the real compression/upload pipeline.
 
-Both are gated by `config.e2eEnabled` and render nothing in any other
-build, so production behaviour is unchanged. Everything after those two
-inputs — queueing, persistence, sync, HTTP, the UI states — is the real
-app code.
+Both are gated by `isE2ETestModeEnabled()`, which reads two switches, and
+render nothing in any other build, so production behaviour is unchanged.
+Everything after those two inputs — queueing, persistence, sync, HTTP, the
+UI states — is the real app code.
+
+- `src/e2e/e2eBuildFlag.ts` — a literal, committed as `false`, that
+  `e2e/enable-e2e-build.js` flips to `true` for an E2E build. This is the
+  switch CI and local release builds use. It is a source constant rather
+  than an environment variable on purpose: `process.env.EXPO_PUBLIC_*` is
+  inlined by Babel at bundle time, and when that inlining does not happen
+  for a Gradle-built release APK the expression survives as a runtime
+  lookup that resolves to `undefined` — the controls silently vanish and
+  the suite fails against an app that looks correct but cannot be driven.
+- `config.e2eEnabled` (`EXPO_PUBLIC_E2E=1`) — kept for development builds
+  started through `expo start`/`expo run:android`, where the dev server
+  supplies the variable at runtime.
 
 ## Running it locally
 
@@ -75,22 +87,28 @@ Prerequisites:
 cd app/mobile
 pnpm install
 
-# 1. Build an E2E release APK that points at the harness's mock backend.
-#    The emulator reaches the host at 10.0.2.2; the harness starts its mock
-#    backend on port 8099 by default.
-EXPO_PUBLIC_E2E=1 \
-EXPO_PUBLIC_API_URL=http://10.0.2.2:8099 \
-EXPO_PUBLIC_ENV_NAME=e2e \
-  npx expo prebuild --platform android
+# 1. Flip the build-time switch that reveals the E2E-only controls. It is
+#    committed disabled so production builds can never ship them; the CI
+#    build flips it itself (see .github/workflows/mobile-e2e.yml).
+node e2e/enable-e2e-build.js
+
+# 2. Build an E2E release APK. The harness serves its mock backend on port
+#    3000 by default, which is already the Android fallback baked into
+#    config.apiUrl, so no EXPO_PUBLIC_API_URL is needed. The emulator
+#    reaches the host at 10.0.2.2.
+EXPO_PUBLIC_ENV_NAME=e2e npx expo prebuild --platform android
 cd android && ./gradlew assembleRelease --no-daemon && cd ..
 
-# 2. Run the suite. `run-e2e.js` starts the mock backend, installs the APK,
+# 3. Run the suite. `run-e2e.js` starts the mock backend, installs the APK,
 #    grants camera permissions, and drives the flows.
 pnpm e2e:android
 
 # Or run a single flow while iterating (still installs/starts everything):
 node e2e/run-e2e.js --flow scan-valid-qr
-node e2e/run-e2e.js --flow sync-on-reconnect --reconnect-delay-ms 15000
+node e2e/run-e2e.js --flow sync-on-reconnect --reconnect-delay-ms 20000
+
+# 4. Put the switch back before committing.
+node e2e/enable-e2e-build.js --disable
 ```
 
 Useful flags (see the header of `e2e/run-e2e.js` for the full list):
@@ -120,7 +138,7 @@ exercise the real NetInfo path:
   upload to `AsyncStorage` instead of attempting it.
 - `sync-on-reconnect` starts with airplane mode **on**, queues an upload,
   and confirms the offline state. The harness then waits
-  `--reconnect-delay-ms` (default 40s — the window the flow spends
+  `--reconnect-delay-ms` (default 60s — the window the flow spends
   queueing) and restores connectivity. `useNetworkStatus` observes the
   transition and `flushPendingNetworkActions` drains the queue against the
   mock backend, asserted by `extendedWaitUntil` on the queue's empty state.
@@ -128,8 +146,12 @@ exercise the real NetInfo path:
 `airplaneModeCommands` in `e2e/e2eAnalysis.js` tries the modern
 `adb shell cmd connectivity airplane-mode` first and falls back to a
 `settings put global airplane_mode_on` write plus the `AIRPLANE_MODE`
-broadcast for older API levels (CI is API 27). The settings state is read
-back to confirm the toggle took effect.
+broadcast for older API levels (CI is API 27). The fallback is not optional
+there: on API 27 `cmd` exits **zero** after printing "No shell command
+implementation.", so the orchestrator always reads
+`settings get global airplane_mode_on` back and applies the fallback
+whenever the value did not change. Trusting the exit code leaves the device
+online and makes every offline assertion fail.
 
 ## Failures → CI artifacts
 
@@ -173,11 +195,23 @@ job.
 
 ## Adding a flow
 
-1. Add `e2e/flows/<name>.yaml` with `appId: org.pulsefy.soter.mobile`.
+1. Add `e2e/flows/<name>.yaml` with `appId: org.pulsefy.soter.mobile` and
+   `launchApp: { clearState: true }`.
 2. Register it in `FLOW_ORDER` in `e2e/e2eAnalysis.js` with the
    connectivity it needs (`online`, `offline`, or `reconnect`).
 3. Prefer existing `testID`s and accessibility labels over literal text;
    add a `testID` to the screen if a stable handle is missing.
+   The two pitfalls `e2e/__tests__/flows.test.js` guards against are worth
+   knowing up front:
+   - **Never `openLink` during the cold start.** Android hands the intent
+     to `MainActivity` even while the JS runtime is still booting, and
+     React Native drops URL events that arrive before its `Linking`
+     listener exists — the app just stays on Home. Wait for the first
+     screen (e.g. `id: "scan-fab"`) before opening a link.
+   - **Only assert copy the app really renders.** A typo makes the flow
+     burn its whole timeout and fail with an opaque "assertion is false".
+     The test resolves each asserted string against the app source, so a
+     string the app does not contain fails fast in `pnpm test`.
 4. If the flow needs a new backend endpoint, add it to
    `e2e/mockBackend.js` and cover it in
    `e2e/__tests__/mockBackend.test.js`.

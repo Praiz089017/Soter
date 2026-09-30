@@ -52,8 +52,11 @@ export interface AppConfig {
    * When true, screens render a small set of deterministic "simulate"
    * controls (scan result, evidence capture) that the Maestro E2E flows
    * drive, because a headless emulator cannot produce a real QR code or
-   * camera frame. Only ever set via `EXPO_PUBLIC_E2E=1` in the E2E build;
-   * production builds leave this `false` and render nothing extra.
+   * camera frame. This is the environment-variable half of
+   * `isE2ETestModeEnabled()` (see `src/e2e/testMode.ts`); the primary switch
+   * is the build-time literal in `src/e2e/e2eBuildFlag.ts`, because a
+   * Gradle-built release APK cannot be relied on to inline `process.env`
+   * reads. Production builds leave both `false` and render nothing extra.
    */
   e2eEnabled: boolean;
 }

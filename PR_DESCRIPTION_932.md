@@ -60,15 +60,22 @@ Closes #932
 - `app/mobile/e2e/__tests__/e2eAnalysis.test.js`
 - `app/mobile/e2e/__tests__/mockBackend.test.js`
 - `app/mobile/e2e/__tests__/runE2e.test.js`
+- `app/mobile/e2e/__tests__/e2eBuildFlag.test.js`
+- `app/mobile/e2e/__tests__/flows.test.js`
+- `app/mobile/e2e/enable-e2e-build.js` — flips the build-time E2E switch
+  for an E2E APK build (and back).
+- `app/mobile/src/e2e/e2eBuildFlag.ts` — the switch itself, committed
+  `false`.
 - `app/mobile/src/e2e/testMode.ts` — E2E-only fixtures, gated by
-  `config.e2eEnabled`.
+  `isE2ETestModeEnabled()`.
 - `app/mobile/E2E_TESTING.md`
 - `.github/workflows/mobile-e2e.yml`
 - `PR_DESCRIPTION_932.md` (this file)
 
 ## Files Modified
 
-- `app/mobile/src/config/index.ts` — add `e2eEnabled` (`EXPO_PUBLIC_E2E === '1'`).
+- `app/mobile/src/config/index.ts` — add `e2eEnabled` (`EXPO_PUBLIC_E2E === '1'`),
+  the second switch read by `isE2ETestModeEnabled()`.
 - `app/mobile/src/screens/ScannerScreen.tsx` — E2E `simulate scan` control
   that calls the real `handleBarCodeScanned`.
 - `app/mobile/src/screens/EvidenceUploadScreen.tsx` — E2E `simulate capture`
@@ -88,7 +95,7 @@ Closes #932
 ## Testing
 
 - [x] Added unit tests
-- [x] Ran the harness's own unit tests locally (27 passing across 3 suites)
+- [x] Ran the harness's own unit tests locally (36 passing across 5 suites)
 - [ ] Full harness run on an emulator (requires Android SDK + Maestro; CI
       covers this)
 
@@ -96,11 +103,13 @@ The harness's pure logic and the mock backend are unit tested without a
 device:
 
 ```
-PASS e2e/__tests__/runE2e.test.js
-PASS e2e/__tests__/mockBackend.test.js
 PASS e2e/__tests__/e2eAnalysis.test.js
-Test Suites: 3 passed, 3 total
-Tests:       27 passed, 27 total
+PASS e2e/__tests__/e2eBuildFlag.test.js
+PASS e2e/__tests__/flows.test.js
+PASS e2e/__tests__/mockBackend.test.js
+PASS e2e/__tests__/runE2e.test.js
+Test Suites: 5 passed, 5 total
+Tests:       36 passed, 36 total
 ```
 
 Coverage includes: flow order and offline-before-reconnect sequencing,
@@ -109,6 +118,15 @@ with entity decoding and failure/error/skip classification, run evaluation
 (fails on any failure, and fails when a flow produced no report), artifact
 classification, report rendering, CLI argument parsing, and every mock
 backend endpoint (full upload session: create → status → chunk → finalize).
+
+The flow files are tested too, which is what keeps the CI failures below
+from coming back: every flow is pinned to the app id and to a cleared start
+state, every flow that uses `openLink` must wait for the app to render
+first (the cold-start deep-link race), every asserted string must exist
+somewhere in the app source (so a typo fails in `pnpm test` instead of
+burning a 30s timeout on the emulator), and the build switch must be
+committed disabled and must round-trip through
+`e2e/enable-e2e-build.js`.
 
 The mobile suite was run before and after the change to confirm no
 regressions. The Sentry ESM transform failures present on `main` in this
@@ -123,8 +141,9 @@ sandbox are unchanged; the 2 new e2e suites and 27 new tests all pass.
 
 ## Behavioural Changes
 
-- **Production builds are unchanged.** `e2eEnabled` is false unless the
-  build sets `EXPO_PUBLIC_E2E=1`; the simulate controls then render nothing.
+- **Production builds are unchanged.** `E2E_BUILD_ENABLED` is committed
+  `false` and `config.e2eEnabled` is false unless the build sets
+  `EXPO_PUBLIC_E2E=1`; the simulate controls then render nothing.
 - New deep-link routes: `soter://aid/:aidId/evidence` and `soter://queue`.
   These extend the existing notification deep-link targets and are useful
   outside E2E as well.
@@ -139,11 +158,50 @@ sandbox are unchanged; the 2 new e2e suites and 27 new tests all pass.
   Android build to CI.
 - **Why test-mode seams.** No mobile E2E tool can present a QR code to an
   emulator camera or drive the native picker reliably. Rather than water
-  down the scan/evidence criteria, two `EXPO_PUBLIC_E2E`-gated controls
-  feed real payloads through the real handlers. The permission *state*
-  handling remains covered by the existing
-  `CameraPermissionDenied.test.tsx` unit test, and the harness pre-grants
-  camera permissions so the scanner mounts.
+  down the scan/evidence criteria, two flag-gated controls feed real
+  payloads through the real handlers. The permission *state* handling
+  remains covered by the existing `CameraPermissionDenied.test.tsx` unit
+  test, and the harness pre-grants camera permissions so the scanner
+  mounts.
+- **Why the seams are gated by a source constant.** The first CI run of
+  this job failed with `id: e2e-simulate-scan is visible` on every flow —
+  the app rendered the screens but none of the E2E-only controls. The cause
+  was that `process.env.EXPO_PUBLIC_E2E` was not inlined into the
+  Gradle-built release bundle: the expression survived as a runtime
+  `process.env` lookup, which is empty in a production bundle, so
+  `e2eEnabled` was `undefined` and the controls never rendered.
+  `EXPO_PUBLIC_API_URL` was lost the same way. `e2eBuildFlag.ts` is a
+  literal instead, so it is baked in by the same compiler pass as any other
+  constant and `e2e/enable-e2e-build.js` can flip it for the E2E build.
+
+### CI failures fixed after the first run
+
+The first job on this branch ran all four flows and failed all four. Each
+failure was reproduced from the run's uploaded artifacts (screenshots, view
+hierarchies, `device-logcat.txt`) rather than guessed at:
+
+1. **E2E controls missing from the APK** — `process.env.EXPO_PUBLIC_*` not
+   inlined in the release build (above). Fixed by the build-time literal;
+   the mock backend was also moved onto the app's own Android fallback port
+   (3000) so a lost `EXPO_PUBLIC_API_URL` can no longer break the online
+   flows, and the workflow now logs whether the URL was inlined.
+2. **Deep links dropped during the cold start** — the flows opened
+   `soter://…` immediately after `launchApp`, and logcat shows the `VIEW`
+   intent reaching `MainActivity` ~3s *before* `ReactNativeJS: Running
+   "main"`. React Native drops URL events delivered before its `Linking`
+   listener exists, so the app stayed on Home. Fixed by waiting for Home to
+   render before `openLink`, and pinned by `flows.test.js`.
+3. **Airplane mode never actually turned on** — `adb shell cmd connectivity
+   airplane-mode` exits **zero** on API 27 after printing "No shell command
+   implementation.", so the fallback never ran and the setting stayed `0`
+   (`could not confirm airplane mode on` in the job log). The orchestrator
+   now reads `settings get global airplane_mode_on` back and applies the
+   settings-write + broadcast fallback whenever the value did not change.
+
+Two further timing fixes came out of the same run: the flows now scroll to
+controls that the capture preview pushes below the fold (Maestro cannot tap
+an off-screen element), and `--reconnect-delay-ms` is 60s so the reconnect
+flow finishes its offline assertions before connectivity is restored.
 - **E2E-only labels are not translated.** The visible text on those two
   controls lives in `src/e2e/testMode.ts` and is rendered as an expression,
   so it stays out of `src/i18n/messages` (translating a string no user can
@@ -155,10 +213,14 @@ sandbox are unchanged; the 2 new e2e suites and 27 new tests all pass.
   backend's own tests. Point the harness at a real backend with
   `--api-url`.
 - **Reconnect timing.** The harness restores connectivity after
-  `--reconnect-delay-ms` (default 40s), the window the flow spends queueing
+  `--reconnect-delay-ms` (default 60s), the window the flow spends queueing
   and confirming the offline state; the flow's `extendedWaitUntil`s observe
   the reconnect rather than gate it. Lower it for local iteration; CI uses
   the default.
+- **Mock backend port.** The mock listens on 3000, which is the port
+  `config.apiUrl` already falls back to on Android, so an online flow still
+  reaches it if the build lost the inlined `EXPO_PUBLIC_API_URL`. The
+  workflow logs which of the two happened.
 - **Emulator profile.** API 27 / Nexus 6 / 2 vCPU / 2GB matches the
   cold-start budget job's low-end field profile. Camera hardware is left
   enabled (the scanner mounts a `CameraView`; no frames are read).
@@ -166,9 +228,13 @@ sandbox are unchanged; the 2 new e2e suites and 27 new tests all pass.
 ## Known Issues
 
 - The harness cannot be executed in this sandbox (no Android SDK/KVM/
-  Maestro), so the flow YAMLs are validated by parser and review rather
-  than a live run. The CI job is the first live execution; expect to tune
-  selector timeouts if the emulator is slower than assumed.
+  Maestro), so the flow YAMLs are validated by parser, unit tests and
+  review rather than a live run here; CI performs the live run.
+- `e2e/enable-e2e-build.js` rewrites `src/e2e/e2eBuildFlag.ts` in the
+  working tree. It is idempotent and reversible (`--disable`), the CI job
+  is throwaway so nothing restores it there, and
+  `e2e/__tests__/e2eBuildFlag.test.js` fails if the switch is ever
+  committed enabled.
 - The 1×1 JPEG fixture in `src/e2e/testMode.ts` is structurally valid and
   never decoded by the simulate path (the mock backend accepts any bytes);
   it only needs to be a JPEG for realism.

@@ -197,8 +197,9 @@ export const EvidenceUploadScreen: React.FC<Props> = ({
   /**
    * E2E-only: populate the capture pipeline with a bundled image so the
    * queue/upload steps can be driven on an emulator, where the native
-   * camera and photo picker cannot be automated. Gated behind
-   * `EXPO_PUBLIC_E2E=1`; never rendered in production (issue #932).
+   * camera and photo picker cannot be automated. Gated behind the E2E
+   * build switch (`src/e2e/e2eBuildFlag.ts`); never rendered in production
+   * (issue #932).
    */
   const useFixtureEvidence = useCallback(() => {
     setSelectedImageUri(E2E_EVIDENCE_IMAGE_DATA_URI);

@@ -17,7 +17,7 @@
  *   --package <id>          Android application id (default: from app.json)
  *   --apk <path>            Release APK to install (default: android/app/build/outputs/apk/release/app-release.apk)
  *   --api-url <url>         Point the app at an existing backend instead of the bundled mock server
- *   --api-port <n>          Port for the bundled mock backend (default: 8099)
+ *   --api-port <n>          Port for the bundled mock backend (default: 3000)
  *   --maestro <bin>         Maestro CLI binary (default: `maestro`)
  *   --flows-dir <path>      Directory of Maestro flow YAML files (default: e2e/flows)
  *   --out <dir>             Artifact/output directory (default: e2e/artifacts)
@@ -26,7 +26,12 @@
  *   --no-install            Skip `adb install` (the app is already installed)
  *   --skip-network          Do not toggle airplane mode (flows must tolerate it)
  *   --reconnect-delay-ms <n> How long the reconnect flow holds offline before the
- *                            harness restores connectivity (default: 40000)
+ *                            harness restores connectivity (default: 60000)
+ *
+ * The default mock port is 3000 rather than an arbitrary one: it is the port
+ * `config.apiUrl` already falls back to on Android (`http://10.0.2.2:3000`),
+ * so the app under test reaches the mock backend whether or not the build
+ * managed to inline `EXPO_PUBLIC_API_URL`.
  */
 
 'use strict';
@@ -50,12 +55,12 @@ const sleepMs = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 function parseArgs(argv) {
   const args = {
-    apiPort: 8099,
+    apiPort: 3000,
     maestro: 'maestro',
     flowsDir: path.join(__dirname, 'flows'),
     out: path.join(__dirname, 'artifacts'),
     report: path.join(__dirname, 'report'),
-    reconnectDelayMs: 40000,
+    reconnectDelayMs: 60000,
     only: [],
   };
 
@@ -150,36 +155,49 @@ function adbTry(args, deviceSerial) {
   }
 }
 
-/**
- * Toggles airplane mode. Tries the modern `cmd connectivity` subcommand
- * first, then the settings-write + broadcast fallback for older API levels
- * (the CI emulator is API 27). Verifies the setting actually changed.
- */
-function setAirplaneMode(deviceSerial, enable) {
-  const { primary, fallback } = airplaneModeCommands(enable);
-
-  const result = adbTry(primary, deviceSerial);
-  if (!result.ok) {
-    for (const command of fallback) {
-      adb(command, deviceSerial);
-    }
-  }
-
+/** Reads the device's airplane-mode setting, or `null` when unavailable. */
+function readAirplaneMode(deviceSerial) {
   const state = adbTry(
     ['shell', 'settings', 'get', 'global', 'airplane_mode_on'],
     deviceSerial,
   );
+  return state.ok ? state.output.trim() : null;
+}
+
+/**
+ * Toggles airplane mode and confirms the device actually changed state.
+ *
+ * `cmd connectivity airplane-mode` only exists on newer Android releases; on
+ * older ones (API 27, the CI profile) `cmd` exits successfully after printing
+ * "No shell command implementation.", so the exit code alone says nothing
+ * about whether the radio state changed. The setting is therefore always read
+ * back, and the settings-write + broadcast fallback is applied whenever the
+ * modern subcommand did not take effect. Without this, an offline flow runs
+ * against a connected device and every offline assertion fails.
+ */
+async function setAirplaneMode(deviceSerial, enable) {
+  const { primary, fallback } = airplaneModeCommands(enable);
   const expected = enable ? '1' : '0';
-  if (state.ok && state.output.trim() === expected) {
-    console.log(
-      `[e2e] airplane mode ${enable ? 'enabled' : 'disabled'}`,
-    );
+
+  adbTry(primary, deviceSerial);
+  if (readAirplaneMode(deviceSerial) !== expected) {
+    for (const command of fallback) {
+      adbTry(command, deviceSerial);
+    }
+    // The broadcast is handled asynchronously; give it time to land before
+    // deciding whether the toggle worked.
+    await sleepMs(2000);
+  }
+
+  const state = readAirplaneMode(deviceSerial);
+  if (state === expected) {
+    console.log(`[e2e] airplane mode ${enable ? 'enabled' : 'disabled'}`);
     return true;
   }
 
   console.warn(
     `[e2e] could not confirm airplane mode ${enable ? 'on' : 'off'} ` +
-      `(settings reported "${state.output.trim()}"); continuing`,
+      `(settings reported "${state}"); continuing`,
   );
   return false;
 }
@@ -293,12 +311,12 @@ async function runFlow({ args, flow, deviceSerial, skipNetwork }) {
 
   if (!skipNetwork) {
     if (flow.network === 'online' || flow.network === 'reconnect') {
-      setAirplaneMode(deviceSerial, false);
+      await setAirplaneMode(deviceSerial, false);
     }
     if (flow.network === 'offline' || flow.network === 'reconnect') {
-      setAirplaneMode(deviceSerial, true);
+      await setAirplaneMode(deviceSerial, true);
       // Let NetInfo observe the transition before the flow launches.
-      await sleepMs(2000);
+      await sleepMs(3000);
     }
   }
 
@@ -313,7 +331,7 @@ async function runFlow({ args, flow, deviceSerial, skipNetwork }) {
     console.log(
       `[e2e] restoring connectivity for "${flow.id}" after ${args.reconnectDelayMs}ms`,
     );
-    setAirplaneMode(deviceSerial, false);
+    await setAirplaneMode(deviceSerial, false);
     exitCode = await maestroPromise;
   } else {
     exitCode = await runMaestro(args, flowFile, junitOut, flowOut);
@@ -389,7 +407,8 @@ async function main() {
     );
     console.log(
       '[e2e] note: the APK must have been built with ' +
-        `EXPO_PUBLIC_API_URL=${baseUrl} for the online flows to reach it`,
+        `EXPO_PUBLIC_API_URL=${baseUrl} for the online flows to reach it; the ` +
+        `Android build already defaults to http://10.0.2.2:${args.apiPort}`,
     );
   }
 
@@ -415,7 +434,7 @@ async function main() {
     }
     if (!args.skipNetwork) {
       // Never leave CI's emulator stranded in airplane mode.
-      setAirplaneMode(args.device, false);
+      await setAirplaneMode(args.device, false);
     }
   }
 

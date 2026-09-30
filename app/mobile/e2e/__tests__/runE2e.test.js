@@ -5,9 +5,14 @@ const { parseArgs } = require('../run-e2e');
 describe('run-e2e parseArgs', () => {
   it('applies the documented defaults', () => {
     const args = parseArgs([]);
-    expect(args.apiPort).toBe(8099);
+    // 3000 is the app's own Android API fallback: the mock backend has to
+    // listen there so an online flow works even if the build lost the inlined
+    // EXPO_PUBLIC_API_URL.
+    expect(args.apiPort).toBe(3000);
     expect(args.maestro).toBe('maestro');
-    expect(args.reconnectDelayMs).toBe(40000);
+    // Long enough for the reconnect flow to finish its offline assertions
+    // before the harness restores connectivity.
+    expect(args.reconnectDelayMs).toBe(60000);
     expect(args.only).toEqual([]);
     expect(args.noInstall).toBeUndefined();
     expect(args.skipNetwork).toBeUndefined();
@@ -32,6 +37,11 @@ describe('run-e2e parseArgs', () => {
     expect(args.noInstall).toBe(true);
     expect(args.skipNetwork).toBe(true);
     expect(args.reconnectDelayMs).toBe(15000);
+  });
+
+  it('allows the mock backend port to be overridden', () => {
+    const args = parseArgs(['--api-port', '8099']);
+    expect(args.apiPort).toBe(8099);
   });
 
   it('rejects unknown arguments instead of silently ignoring them', () => {

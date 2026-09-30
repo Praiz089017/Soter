@@ -6,7 +6,8 @@
  * produced: a physical QR code held up to the camera, and a real photo
  * from the device camera or gallery. Those screens therefore render a
  * single deterministic "simulate" control each, but only when the build
- * was made with `EXPO_PUBLIC_E2E=1`.
+ * flips the E2E switch (`src/e2e/e2eBuildFlag.ts`, or `EXPO_PUBLIC_E2E=1`
+ * for dev-server builds).
  *
  * The controls call the exact same handlers a real interaction does
  * (`ScannerScreen`'s `handleBarCodeScanned`, `EvidenceUploadScreen`'s
@@ -14,9 +15,11 @@
  * de-duplication, navigation, image handling, queueing and sync — they
  * only skip the parts of the OS that cannot be automated in an emulator.
  *
- * Production builds never set the flag, so this code path is dead there.
+ * Production builds never flip either switch, so this code path is dead
+ * there.
  */
 import { config } from '../config';
+import { E2E_BUILD_ENABLED } from './e2eBuildFlag';
 
 /**
  * A valid Soter package deep link, in the same format a real QR code
@@ -52,5 +55,14 @@ export const E2E_EVIDENCE_IMAGE_DATA_URI = `data:image/jpeg;base64,${E2E_EVIDENC
 export const E2E_SIMULATE_SCAN_LABEL = 'Simulate scan (E2E)';
 export const E2E_SIMULATE_CAPTURE_LABEL = 'Simulate capture (E2E)';
 
-/** Whether this build exposes the E2E-only simulate controls. */
-export const isE2ETestModeEnabled = (): boolean => config.e2eEnabled === true;
+/**
+ * Whether this build exposes the E2E-only simulate controls.
+ *
+ * Two switches, because they cover different build paths: `E2E_BUILD_ENABLED`
+ * is the literal the CI build flips (see `e2e/enable-e2e-build.js`), while
+ * `config.e2eEnabled` keeps `EXPO_PUBLIC_E2E=1` working for local
+ * development builds started through `expo start`/`expo run:*`, where the
+ * variable is read at runtime by the dev server.
+ */
+export const isE2ETestModeEnabled = (): boolean =>
+  E2E_BUILD_ENABLED === true || config.e2eEnabled === true;
