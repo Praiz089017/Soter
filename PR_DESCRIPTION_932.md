@@ -281,6 +281,30 @@ translator in scope.** The sub-component referenced `t` but never called
    how the fault was confirmed locally. Two other suites
    (`AppNavigator`, `ScannerScreen`) also start passing once Sentry is
 transformed instead of crashing the module graph.
+
+### CI failures fixed after the fourth run
+
+The fourth job passed `scan-valid-qr` (the crash fix above) plus
+`evidence-capture-queue` and `sync-on-reconnect`; only `offline-queue`
+failed, at its `"Upload queued and will send when connectivity returns."`
+assertion. The step screenshot and view hierarchy in the uploaded
+artifacts explain it: the foreground window is `com.android.launcher3`,
+and `commands.json` shows the tap that preceded it at `(720, 2464)`.
+
+1. **The tap hit the system navigation bar, not the button.** The app
+   draws edge-to-edge, so the form scrolls until the upload button is
+   "fully inside the viewport" while it still sits *behind* the nav bar,
+   whose home button owns x 580-860 / y 2392-2560 on this emulator. The
+   tap at the button's centre coordinates (y=2464) landed on Home,
+   backgrounded the app, and the assertion timed out on a screenshot of
+   the launcher — a real bug for any worker, not just the harness. Where
+   `scrollUntilVisible` stops depends on the swipe quantum, which is why
+   the same flow passed on the previous run with no code change.
+   All three scrolls that find `upload-evidence-button` now pass
+   `centerElement: true`, so the scroll keeps going until the button
+   clears the bar (and gives up after a few attempts instead of hanging
+   when the form cannot scroll further), and `flows.test.js` fails if a
+   flow taps the button without centering it first.
 - **E2E-only labels are not translated.** The visible text on those two
   controls lives in `src/e2e/testMode.ts` and is rendered as an expression,
   so it stays out of `src/i18n/messages` (translating a string no user can

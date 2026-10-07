@@ -170,6 +170,27 @@ failed waiting for offline copy that never rendered. The commands are
 idempotent, so running them all is safe; the read-back is only used to log
 what the device reports.
 
+## Taps near the bottom of the screen
+
+The app draws edge-to-edge, so a form can be scrolled until its last button
+is "fully inside the viewport" while it still sits **behind** the system
+navigation bar. On the CI emulator that bar owns x 580-860 / y 2392-2560
+(the home button), so `tapOn` at the element's centre coordinates lands on
+Home: the app is backgrounded and the assertion that follows times out on a
+screenshot of the launcher. Maestro's default stop condition for
+`scrollUntilVisible` (`visibilityPercentage: 100`) is satisfied inside that
+strip, and *where* the swipe sequence happens to stop decides the outcome —
+which is why `offline-queue` passed one run and failed the next with no code
+change between them.
+
+Every `scrollUntilVisible` that finds a control to tap therefore sets
+`centerElement: true`, so the scroll keeps going until the element is clear
+of the bar (it gives up after a few attempts instead of hanging when the
+form cannot scroll any further).
+`e2e/__tests__/flows.test.js` fails if a flow taps
+`upload-evidence-button` without centering it first. The same trap applies
+to any new flow that taps a control near the bottom of a form.
+
 ## Failures → CI artifacts
 
 The workflow (`.github/workflows/mobile-e2e.yml`) uploads, always:
@@ -218,7 +239,7 @@ job.
    connectivity it needs (`online`, `offline`, or `reconnect`).
 3. Prefer existing `testID`s and accessibility labels over literal text;
    add a `testID` to the screen if a stable handle is missing.
-   The two pitfalls `e2e/__tests__/flows.test.js` guards against are worth
+   The three pitfalls `e2e/__tests__/flows.test.js` guards against are worth
    knowing up front:
    - **Never `openLink` during the cold start.** Android hands the intent
      to `MainActivity` even while the JS runtime is still booting, and
@@ -229,6 +250,11 @@ job.
      burn its whole timeout and fail with an opaque "assertion is false".
      The test resolves each asserted string against the app source, so a
      string the app does not contain fails fast in `pnpm test`.
+   - **Never tap a control that is still behind the navigation bar.**
+     Scrolling until it is "fully visible" is not enough on this
+     edge-to-edge layout — the tap hits the system home button instead.
+     Scroll with `centerElement: true` (see "Taps near the bottom of the
+     screen" above).
 4. If the flow needs a new backend endpoint, add it to
    `e2e/mockBackend.js` and cover it in
    `e2e/__tests__/mockBackend.test.js`.

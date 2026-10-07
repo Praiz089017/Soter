@@ -99,4 +99,38 @@ describe('Maestro flow definitions', () => {
       }
     }
   });
+
+  it('centres the upload button before tapping it', () => {
+    // `scrollUntilVisible` stops the moment an element is fully inside the
+    // viewport — and on this edge-to-edge layout the strip behind the system
+    // navigation bar counts as inside it. The tap then lands on the bar's
+    // home button (x 580-860 / y 2392-2560 on the CI emulator), which
+    // backgrounds the app, so the assertion that follows never sees its
+    // copy. Whether the scroll happens to stop above or below the bar
+    // depends on the swipe quantum, so the same flow passes on one run and
+    // fails on the next; `centerElement: true` removes the luck.
+    const commandBlocks = source => source.split(/(?=^- )/m);
+
+    let centred = 0;
+    for (const flow of flows) {
+      const scrollsForButton = commandBlocks(flow.source).filter(
+        block =>
+          block.startsWith('- scrollUntilVisible:') &&
+          block.includes('id: "upload-evidence-button"'),
+      );
+
+      if (flow.source.includes('tapOn:\n    id: "upload-evidence-button"')) {
+        // A flow that taps the button must scroll to it first …
+        expect(scrollsForButton.length).toBeGreaterThan(0);
+      }
+
+      for (const block of scrollsForButton) {
+        // … and that scroll must not stop with it behind the navigation bar.
+        centred += 1;
+        expect(block).toContain('centerElement: true');
+      }
+    }
+
+    expect(centred).toBeGreaterThan(0);
+  });
 });

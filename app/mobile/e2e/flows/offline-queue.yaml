@@ -54,6 +54,15 @@ tags:
       id: "upload-evidence-button"
     direction: DOWN
     timeout: 30000
+    # The default stop condition ("fully inside the 2560px viewport") is
+    # satisfied while the button still sits *behind* the system navigation
+    # bar, whose home button occupies x 580-860 / y 2392-2560. The tap then
+    # lands on Home, the app is backgrounded and the assertion that follows
+    # can never see its copy — which is exactly how this flow failed on one
+    # run and passed on the next (the swipe quantum decides where it stops).
+    # centerElement keeps scrolling so the button clears the bar, and gives
+    # up rather than hanging when it is already as far up as the form goes.
+    centerElement: true
 - tapOn:
     id: "upload-evidence-button"
     enabled: true

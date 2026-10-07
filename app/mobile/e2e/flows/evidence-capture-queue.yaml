@@ -45,6 +45,11 @@ tags:
       id: "upload-evidence-button"
     direction: DOWN
     timeout: 30000
+    # "Fully inside the viewport" is satisfied while the button is still
+    # behind the system navigation bar; the tap would then land on the bar's
+    # home button, background the app and fail the assertion below. Keep
+    # scrolling until the button clears it (see offline-queue.yaml).
+    centerElement: true
 - tapOn:
     id: "upload-evidence-button"
     enabled: true
