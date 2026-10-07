@@ -81,7 +81,7 @@
       "^expo-modules-core/src/polyfill/dangerous-internal$": "<rootDir>/../../node_modules/expo/node_modules/expo-modules-core/src/polyfill/dangerous-internal.ts"
     },
     "transformIgnorePatterns": [
-      "node_modules/(?!(?:.pnpm/)?((jest-)?react-native|@react-native(?:/.*)?|react-clone-referenced-element|@react-navigation(?:/.*)?|expo(?:nent)?(?:/.*)?|@expo(?:nent)?(?:/.*)?|expo-.*|@expo-google-fonts/.*|react-navigation|@walletconnect(?:/.*)?))"
+      "node_modules/(?!(?:.pnpm/)?((jest-)?react-native|@react-native(?:/.*)?|react-clone-referenced-element|@react-navigation(?:/.*)?|expo(?:nent)?(?:/.*)?|@expo(?:nent)?(?:/.*)?|expo-.*|@expo-google-fonts/.*|react-navigation|@walletconnect(?:/.*)?|@sentry(?:/.*)?))"
     ]
   },
   "private": true

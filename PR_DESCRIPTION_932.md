@@ -242,6 +242,45 @@ one down:
 `--reconnect-delay-ms` was also raised to 120s: restoring connectivity
 before the reconnect flow has queued its upload makes the app upload live,
 which fails the flow's "Upload queued…" assertion.
+
+### CI failures fixed after the third run
+
+The third job passed `evidence-capture-queue`, `offline-queue` and
+`sync-on-reconnect`; only `scan-valid-qr` failed, at the step that asserts
+`E2E Emergency Food Supply` on the aid details screen. The device logcat in
+the uploaded artifacts shows why the scan flow reached the details screen and
+then saw nothing:
+
+```
+E/ReactNativeJS: { [ReferenceError: Property 't' doesn't exist]
+  componentStack: '\n    at TimelineMilestoneRow (address at index.android.bundle:1:2743521)
+    ... at AidDetailsScreen ...'
+W/ReactNativeJS: '[CrashReportingGate] Caught by ErrorBoundary:' …
+```
+
+1. **`TimelineMilestoneRow` rendered the copy-hash button with no
+translator in scope.** The sub-component referenced `t` but never called
+   `useTranslation()`, so *any* milestone carrying a transaction hash
+   (`builtTimelineMilestones` derives one from
+   `approvalTransactionHash`, which the E2E fixture has) threw a
+   `ReferenceError` during render. The error boundary then replaced the
+   whole screen with its fallback, so the flow's assertion never had a
+   chance. This is a production bug, not a harness artefact: it blanks Aid
+   Details for every package with an on-chain approval hash. The component
+   now gets its own `useTranslation()`; `tsc --noEmit` reports one fewer
+   error than before the change (the same file).
+2. **The regression test for it could not run.**
+   `src/__tests__/AidDetailsScreen.test.tsx` covers exactly this fixture
+   (it renders `approvalTransactionHash`), but failed at import —
+   `@sentry/react-native` ships ESM and was missing from the Jest
+   `transformIgnorePatterns` — and then at render, because the screen reads
+   `useTranslation()` and the test mounted no `LanguageProvider`. Both are
+   fixed (the wrapper and one entry in `app/mobile/package.json`'s Jest
+   config); the suite now fails on the pre-fix screen with
+   `ReferenceError: Property 't' doesn't exist` and passes with it, which is
+   how the fault was confirmed locally. Two other suites
+   (`AppNavigator`, `ScannerScreen`) also start passing once Sentry is
+transformed instead of crashing the module graph.
 - **E2E-only labels are not translated.** The visible text on those two
   controls lives in `src/e2e/testMode.ts` and is rendered as an expression,
   so it stays out of `src/i18n/messages` (translating a string no user can
