@@ -19,8 +19,8 @@
  * `network` tells the orchestrator what connectivity the flow needs before
  * it starts:
  *   - `online`  — leave the device connected (the default).
- *   - `offline` — put the device in airplane mode first.
- *   - `reconnect` — start in airplane mode, then restore connectivity
+ *   - `offline` — take the device offline first.
+ *   - `reconnect` — start offline, then restore connectivity
  *     *while the app is running* so the sync-on-reconnect path fires.
  *
  * Keep this list in sync with `flows/index` and `E2E_TESTING.md`.
@@ -33,18 +33,33 @@ const FLOW_ORDER = [
 ];
 
 /**
- * `adb` argument lists (excluding `-s <serial>`) that toggle airplane mode.
+ * `adb` argument lists (excluding `-s <serial>`) that take the device offline
+ * and bring it back.
  *
- * Android's `cmd connectivity airplane-mode` subcommand only exists on
- * newer releases, so a settings write plus the `AIRPLANE_MODE` broadcast is
- * kept as a fallback. Both are tried by the orchestrator; the fallback also
- * covers API 27, the profile used by CI (see E2E_TESTING.md).
+ * Android's `cmd connectivity airplane-mode` subcommand only exists on newer
+ * releases (API 30+), so the CI profile (API 27) needs a fallback. The
+ * fallback toggles the two transports that actually carry traffic on an
+ * emulator — Wi-Fi and mobile data — with `svc`.
+ *
+ * `svc` is what makes this work, and it replaces an earlier fallback that
+ * wrote the `airplane_mode_on` setting and then broadcast
+ * `android.intent.action.AIRPLANE_MODE`. That broadcast is protected: the
+ * shell user cannot send it, so the radio never dropped. logcat from the
+ * failing CI run:
+ *
+ *   Permission Denial: not allowed to send broadcast
+ *   android.intent.action.AIRPLANE_MODE from pid=5845, uid=2000
+ *
+ * The setting still gets written (so the status-bar indicator is honest and
+ * `setAirplaneMode` can read it back), but only `svc` actually disconnects,
+ * which is why both `svc` commands are applied on every toggle.
  *
  * @param {boolean} enable
  * @returns {{ primary: string[], fallback: string[][] }}
  */
 function airplaneModeCommands(enable) {
   const state = enable ? 'enable' : 'disable';
+  const svcState = enable ? 'disable' : 'enable';
   return {
     primary: ['shell', 'cmd', 'connectivity', 'airplane-mode', state],
     fallback: [
@@ -56,16 +71,8 @@ function airplaneModeCommands(enable) {
         'airplane_mode_on',
         enable ? '1' : '0',
       ],
-      [
-        'shell',
-        'am',
-        'broadcast',
-        '-a',
-        'android.intent.action.AIRPLANE_MODE',
-        '--ez',
-        'state',
-        enable ? 'true' : 'false',
-      ],
+      ['shell', 'svc', 'wifi', svcState],
+      ['shell', 'svc', 'data', svcState],
     ],
   };
 }

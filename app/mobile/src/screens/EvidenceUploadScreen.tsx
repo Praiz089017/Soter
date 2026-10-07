@@ -442,6 +442,19 @@ export const EvidenceUploadScreen: React.FC<Props> = ({
         <Text style={styles.helpText}>
           Compressed image upload saves data on low-bandwidth connections.
         </Text>
+        {/*
+          The upload outcome is rendered *above* the button, not below it.
+          The app draws edge-to-edge, so the tail of a phone-sized form sits
+          under the system navigation bar (the same reason the scanner's
+          overlay overflows) — copy appended after the button can end up
+          behind the bar and be invisible to the user, the accessibility
+          tree and the E2E flows. Above the button it shares the space the
+          button itself is scrolled into.
+        */}
+        {statusMessage ? (
+          <Text style={styles.statusText}>{statusMessage}</Text>
+        ) : null}
+        {error ? <Text style={styles.errorText}>{error}</Text> : null}
         <TouchableOpacity
           style={[styles.button, styles.primaryButton]}
           onPress={handleUpload}
@@ -463,10 +476,6 @@ export const EvidenceUploadScreen: React.FC<Props> = ({
             <Text style={styles.buttonText}>{t('aidDetails.uploadEvidence')}</Text>
           )}
         </TouchableOpacity>
-        {statusMessage ? (
-          <Text style={styles.statusText}>{statusMessage}</Text>
-        ) : null}
-        {error ? <Text style={styles.errorText}>{error}</Text> : null}
         {activeUpload ? (
           <View style={styles.queueCard}>
             <View style={styles.queueHeader}>
@@ -544,6 +553,10 @@ const makeStyles = (colors: any) =>
     },
     content: {
       padding: 20,
+      // Clears the system navigation bar (48dp on the CI emulator) so the
+      // trailing offline notice can be scrolled fully into view instead of
+      // ending up behind it.
+      paddingBottom: 96,
       gap: 18,
     },
     header: {
@@ -628,12 +641,10 @@ const makeStyles = (colors: any) =>
       marginTop: 8,
     },
     statusText: {
-      marginTop: 12,
       fontSize: 14,
       color: colors.info,
     },
     errorText: {
-      marginTop: 12,
       fontSize: 14,
       color: colors.error,
     },

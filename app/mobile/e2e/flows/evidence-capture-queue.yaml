@@ -50,7 +50,8 @@ tags:
     enabled: true
 
 # Online: the upload completes against the E2E backend without queueing. The
-# status line renders directly under the button, so it is on screen already.
+# status line renders directly above the button, so it is on screen already
+# (the screen is scrolled to the button).
 - extendedWaitUntil:
     visible: "Evidence uploaded successfully."
     timeout: 60000

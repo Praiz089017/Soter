@@ -1,6 +1,6 @@
 # Core field flow: capture evidence while offline and confirm it is queued.
 #
-# The harness puts the device in airplane mode before launching this flow.
+# The harness takes the device offline before launching this flow.
 # NetInfo reports offline, so the evidence upload must be persisted to the
 # sync queue (AsyncStorage) instead of being attempted, and must be visible
 # in the submission queue for inspection.

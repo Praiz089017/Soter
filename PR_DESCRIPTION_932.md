@@ -35,14 +35,14 @@ Closes #932
 | :--- | :--- |
 | An E2E harness runs against a simulator or emulator in CI | `.github/workflows/mobile-e2e.yml` builds the E2E APK and runs `e2e/run-e2e.js` on an API 27 Android emulator |
 | Scan, evidence capture, offline queue, and sync-on-reconnect are covered | `e2e/flows/{scan-valid-qr,evidence-capture-queue,offline-queue,sync-on-reconnect}.yaml` |
-| Airplane-mode and reconnect transitions are exercised | Harness toggles `adb` airplane mode; `offline-queue` runs offline, `sync-on-reconnect` observes connectivity returning while the app is running |
+| Offline and reconnect transitions are exercised | Harness toggles device connectivity with `adb`; `offline-queue` runs offline, `sync-on-reconnect` observes connectivity returning while the app is running |
 | Failures produce screenshots and logs as CI artifacts | Maestro per-flow bundles (`screenshots/`, `logs/device-logcat.txt`, `screen-hierarchy/`) + a full `logcat.txt`, uploaded always |
 | Running the suite locally is documented | `app/mobile/E2E_TESTING.md`, linked from the mobile README and CONTRIBUTING |
 
 ## Files Added
 
 - `app/mobile/e2e/run-e2e.js` — orchestration CLI: installs the APK, grants
-  camera permissions, toggles airplane mode around the offline flows,
+  camera permissions, takes the device offline around the offline flows,
   restores connectivity mid-run for the reconnect flow, and writes
   `e2e/report.{json,md}`.
 - `app/mobile/e2e/e2eAnalysis.js` — pure, device-free logic (flow order,
@@ -113,7 +113,7 @@ Tests:       36 passed, 36 total
 ```
 
 Coverage includes: flow order and offline-before-reconnect sequencing,
-airplane-mode command derivation (primary + API-27 fallback), JUnit parsing
+offline-toggle command derivation (primary + `svc` fallback), JUnit parsing
 with entity decoding and failure/error/skip classification, run evaluation
 (fails on any failure, and fails when a flow produced no report), artifact
 classification, report rendering, CLI argument parsing, and every mock
@@ -193,15 +193,55 @@ hierarchies, `device-logcat.txt`) rather than guessed at:
    render before `openLink`, and pinned by `flows.test.js`.
 3. **Airplane mode never actually turned on** — `adb shell cmd connectivity
    airplane-mode` exits **zero** on API 27 after printing "No shell command
-   implementation.", so the fallback never ran and the setting stayed `0`
-   (`could not confirm airplane mode on` in the job log). The orchestrator
-   now reads `settings get global airplane_mode_on` back and applies the
-   settings-write + broadcast fallback whenever the value did not change.
+   implementation.", so the subcommand was a no-op. That first fix wrote the
+   setting and read it back; the second run showed why that is a false
+   confirmation — see below.
 
 Two further timing fixes came out of the same run: the flows now scroll to
 controls that the capture preview pushes below the fold (Maestro cannot tap
-an off-screen element), and `--reconnect-delay-ms` is 60s so the reconnect
-flow finishes its offline assertions before connectivity is restored.
+an off-screen element), and `--reconnect-delay-ms` is long enough for the
+reconnect flow to finish its offline assertions before connectivity is
+restored.
+
+### CI failures fixed after the second run
+
+The second job ran all four flows and failed all four again. The uploaded
+artifacts (screenshots, view hierarchies, `device-logcat.txt`) pinned each
+one down:
+
+1. **The scan seam rendered under the navigation bar.** The scanner's
+   bottom overlay is a centred column (instruction + Cancel + Switch to Bulk
+   Mode) that already fills the space the edge-to-edge layout leaves above
+   the system navigation bar; the E2E control appended to it was centred
+   *past* the bar, so it rendered but was invisible and absent from the
+   accessibility tree. It is now anchored near the top of the overlay.
+2. **`airplane_mode_on` is not connectivity.** The fallback wrote the setting
+   and then broadcast `android.intent.action.AIRPLANE_MODE`, which is a
+   *protected* broadcast: logcat shows `Permission Denial: not allowed to
+   send broadcast … from uid=2000`, so the radios stayed up and the app kept
+   reporting `isConnected: true`. The offline flows then failed waiting for
+   offline copy that never rendered (and `sync-on-reconnect` dispatched its
+   upload live). The fallback now moves the radios with `svc wifi` / `svc
+   data`, and the orchestrator applies every command on each toggle instead
+   of trusting a read-back that the settings write satisfies on its own.
+3. **`crypto.subtle` does not exist in a React Native bundle.** The evidence
+   chunk path digests every chunk, and `sha256Hex` threw `WebCrypto subtle
+   is not available` on device (logcat: `sync.dispatch.failed`), so no
+   evidence upload could ever complete — online or from the queue. This
+   affects production too, not just the harness. `src/services/sha256.ts`
+   now provides a dependency-free SHA-256 (the platform `crypto.subtle` is
+   still preferred when present) and is unit tested against the FIPS
+   vectors.
+4. **Upload status copy sat below the fold.** On this edge-to-edge layout
+   the tail of a phone-sized form is covered by the navigation bar, so
+   `"Evidence uploaded successfully."` / `"Upload queued…"` — rendered
+   under the upload button — were invisible and unreachable. The outcome
+   line is now rendered *above* the button (and the form has bottom padding
+   so the trailing offline notice can scroll clear of the bar).
+
+`--reconnect-delay-ms` was also raised to 120s: restoring connectivity
+before the reconnect flow has queued its upload makes the app upload live,
+which fails the flow's "Upload queued…" assertion.
 - **E2E-only labels are not translated.** The visible text on those two
   controls lives in `src/e2e/testMode.ts` and is rendered as an expression,
   so it stays out of `src/i18n/messages` (translating a string no user can
@@ -213,10 +253,10 @@ flow finishes its offline assertions before connectivity is restored.
   backend's own tests. Point the harness at a real backend with
   `--api-url`.
 - **Reconnect timing.** The harness restores connectivity after
-  `--reconnect-delay-ms` (default 60s), the window the flow spends queueing
-  and confirming the offline state; the flow's `extendedWaitUntil`s observe
-  the reconnect rather than gate it. Lower it for local iteration; CI uses
-  the default.
+  `--reconnect-delay-ms` (default 120s), the window the flow spends
+  cold-starting, queueing and confirming the offline state; the flow's
+  `extendedWaitUntil`s observe the reconnect rather than gate it. Lower it
+  for local iteration; CI uses the default.
 - **Mock backend port.** The mock listens on 3000, which is the port
   `config.apiUrl` already falls back to on Android, so an online flow still
   reaches it if the build lost the inlined `EXPO_PUBLIC_API_URL`. The

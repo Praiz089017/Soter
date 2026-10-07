@@ -5,9 +5,9 @@
 # sync queue's reconnect path (`useNetworkStatus` → `flushPendingNetworkActions`)
 # drains it without the worker doing anything.
 #
-# The harness starts this flow with the device in airplane mode and restores
-# connectivity after `--reconnect-delay-ms` (default 60s), which is the window
-# the flow spends queueing and confirming the offline state. The
+# The harness starts this flow offline and restores connectivity after
+# `--reconnect-delay-ms` (default 120s), which is the window the flow spends
+# cold-starting, queueing and confirming the offline state. The
 # `extendedWaitUntil` calls then observe the reconnect rather than gating it.
 appId: org.pulsefy.soter.mobile
 name: sync-on-reconnect

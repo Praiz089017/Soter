@@ -197,8 +197,23 @@ export const ScannerScreen: React.FC<Props> = ({ navigation }) => {
               Switch to Bulk Mode
             </Text>
           </TouchableOpacity>
+        </View>
 
-          {isE2ETestModeEnabled() ? (
+        {/*
+          E2E-only control (issue #932).
+
+          Anchored to the top of the overlay rather than appended to the bottom
+          control column. That column (instruction + Cancel + Switch to Bulk
+          Mode) already fills the space the edge-to-edge layout leaves above
+          the system navigation bar, so a control appended to it is centred
+          past the bar: it renders, but underneath the navigation bar, which is
+          both invisible to the user and absent from the accessibility tree
+          Maestro reads. From the top it is always on screen, and this block is
+          dead code in production because `isE2ETestModeEnabled()` is false
+          there.
+        */}
+        {isE2ETestModeEnabled() ? (
+          <View style={styles.e2eControl} pointerEvents="box-none">
             <TouchableOpacity
               style={styles.e2eButton}
               accessibilityRole="button"
@@ -210,8 +225,8 @@ export const ScannerScreen: React.FC<Props> = ({ navigation }) => {
             >
               <Text style={styles.e2eButtonText}>{E2E_SIMULATE_SCAN_LABEL}</Text>
             </TouchableOpacity>
-          ) : null}
-        </View>
+          </View>
+        ) : null}
       </View>
 
       {/* Scan-again button — shown after a failed scan */}
@@ -328,6 +343,13 @@ const styles = StyleSheet.create({
   bulkModeText: {
     fontSize: 14,
     fontWeight: '600',
+  },
+  e2eControl: {
+    position: 'absolute',
+    top: 16,
+    left: 0,
+    right: 0,
+    alignItems: 'center',
   },
   e2eButton: {
     marginTop: 12,

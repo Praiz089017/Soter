@@ -13,7 +13,7 @@ how to run it locally and in CI.
 | :--- | :--- | :--- | :--- |
 | Scan | `e2e/flows/scan-valid-qr.yaml` | online | Home → Scanner, camera-permission state, QR parse + de-dup, navigation to aid details |
 | Evidence capture | `e2e/flows/evidence-capture-queue.yaml` | online | Evidence screen, capture pipeline, inline upload, success state |
-| Offline queue | `e2e/flows/offline-queue.yaml` | airplane mode | Offline detection, upload queued to `AsyncStorage`, visible in Submission Queue |
+| Offline queue | `e2e/flows/offline-queue.yaml` | offline | Offline detection, upload queued to `AsyncStorage`, visible in Submission Queue |
 | Sync on reconnect | `e2e/flows/sync-on-reconnect.yaml` | offline → online | NetInfo transition, `flushPendingNetworkActions`, queue drains with no user action |
 
 `e2e/e2eAnalysis.js` also pins the flow order and the offline-before-
@@ -118,7 +118,7 @@ Useful flags (see the header of `e2e/run-e2e.js` for the full list):
 | `--device <serial>` | Target a specific emulator/device |
 | `--apk <path>` | Install a different build |
 | `--no-install` | Use the already-installed app |
-| `--skip-network` | Do not touch airplane mode (device stays as-is) |
+| `--skip-network` | Do not take the device offline (it stays as-is) |
 | `--api-url <url>` | Skip the mock backend and target a real API |
 | `--flow <id>` | Run one flow (repeatable) |
 | `--out <dir>` | Artifact directory (default `e2e/artifacts`) |
@@ -129,29 +129,46 @@ To run just the harness's own unit tests (no device needed):
 pnpm test -- e2e/__tests__ 
 ```
 
-## Airplane mode and the reconnect transition
+## Taking the device offline, and the reconnect transition
 
 Connectivity is toggled with `adb`, not from inside the app, so the flows
 exercise the real NetInfo path:
 
-- `offline-queue` runs with airplane mode **on**; the app queues the
-  upload to `AsyncStorage` instead of attempting it.
-- `sync-on-reconnect` starts with airplane mode **on**, queues an upload,
-  and confirms the offline state. The harness then waits
-  `--reconnect-delay-ms` (default 60s — the window the flow spends
-  queueing) and restores connectivity. `useNetworkStatus` observes the
+- `offline-queue` runs **offline**; the app queues the upload to
+  `AsyncStorage` instead of attempting it.
+- `sync-on-reconnect` starts **offline**, queues an upload, and confirms
+  the offline state. The harness then waits `--reconnect-delay-ms`
+  (default 120s — the window the flow spends cold-starting, queueing and
+  asserting) and restores connectivity. `useNetworkStatus` observes the
   transition and `flushPendingNetworkActions` drains the queue against the
-  mock backend, asserted by `extendedWaitUntil` on the queue's empty state.
+  mock backend, asserted by `extendedWaitUntil` on the queue's empty
+  state.
 
-`airplaneModeCommands` in `e2e/e2eAnalysis.js` tries the modern
-`adb shell cmd connectivity airplane-mode` first and falls back to a
-`settings put global airplane_mode_on` write plus the `AIRPLANE_MODE`
-broadcast for older API levels (CI is API 27). The fallback is not optional
-there: on API 27 `cmd` exits **zero** after printing "No shell command
-implementation.", so the orchestrator always reads
-`settings get global airplane_mode_on` back and applies the fallback
-whenever the value did not change. Trusting the exit code leaves the device
-online and makes every offline assertion fail.
+`airplaneModeCommands` in `e2e/e2eAnalysis.js` produces the `adb` argument
+lists. Three things about them are load-bearing:
+
+1. **`cmd connectivity airplane-mode` is version-specific.** It exists from
+   API 30; on the CI profile (API 27) it exits **zero** after printing
+   "No shell command implementation.", so its exit code means nothing.
+2. **The `AIRPLANE_MODE` broadcast cannot be sent from the shell.** It is a
+   protected broadcast, so `am broadcast -a
+   android.intent.action.AIRPLANE_MODE` fails with
+   `Permission Denial: not allowed to send broadcast … from uid=2000` and
+   leaves the radio up.
+3. **The fallback therefore has to move the radios, not the setting.**
+   `svc wifi disable` + `svc data disable` tear down the two transports
+   that carry traffic on an emulator; `svc wifi enable` + `svc data enable`
+   bring them back. `settings put global airplane_mode_on` is still written
+   so the status-bar indicator is honest.
+
+The orchestrator applies **all** of those commands on every toggle instead
+of deciding from a read-back whether to fall back. `airplane_mode_on` reads
+`1` after the settings write even when the radio never dropped, so gating on
+it is a false confirmation — the trap the first CI run fell into, where the
+offline flows ran against a connected device (`isConnected` stayed true) and
+failed waiting for offline copy that never rendered. The commands are
+idempotent, so running them all is safe; the read-back is only used to log
+what the device reports.
 
 ## Failures → CI artifacts
 

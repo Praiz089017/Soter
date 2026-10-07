@@ -56,9 +56,9 @@ describe('airplaneModeCommands', () => {
     ]);
   });
 
-  it('provides a settings + broadcast fallback for older API levels', () => {
+  it('provides a settings + svc fallback for older API levels', () => {
     const { fallback } = airplaneModeCommands(true);
-    expect(fallback).toHaveLength(2);
+    expect(fallback).toHaveLength(3);
     expect(fallback[0]).toEqual([
       'shell',
       'settings',
@@ -67,20 +67,18 @@ describe('airplaneModeCommands', () => {
       'airplane_mode_on',
       '1',
     ]);
-    expect(fallback[1]).toEqual([
-      'shell',
-      'am',
-      'broadcast',
-      '-a',
-      'android.intent.action.AIRPLANE_MODE',
-      '--ez',
-      'state',
-      'true',
-    ]);
+    expect(fallback[1]).toEqual(['shell', 'svc', 'wifi', 'disable']);
+    expect(fallback[2]).toEqual(['shell', 'svc', 'data', 'disable']);
   });
 
-  it('sets state=false on the broadcast when disabling', () => {
-    expect(airplaneModeCommands(false).fallback[1]).toContain('false');
+  it('brings both radios back instead of using the protected broadcast', () => {
+    const { fallback } = airplaneModeCommands(false);
+    expect(fallback[1]).toEqual(['shell', 'svc', 'wifi', 'enable']);
+    expect(fallback[2]).toEqual(['shell', 'svc', 'data', 'enable']);
+    // `android.intent.action.AIRPLANE_MODE` is a protected broadcast: the
+    // shell user cannot send it, so relying on it silently leaves the device
+    // online while the setting reads as enabled.
+    expect(JSON.stringify(fallback)).not.toContain('AIRPLANE_MODE');
   });
 });
 

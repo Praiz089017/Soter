@@ -24,9 +24,9 @@
  *   --report <path>         Report path without extension (default: e2e/report)
  *   --flow <id>             Only run the named flow (repeatable)
  *   --no-install            Skip `adb install` (the app is already installed)
- *   --skip-network          Do not toggle airplane mode (flows must tolerate it)
+ *   --skip-network          Do not take the device offline (flows must tolerate it)
  *   --reconnect-delay-ms <n> How long the reconnect flow holds offline before the
- *                            harness restores connectivity (default: 60000)
+ *                            harness restores connectivity (default: 120000)
  *
  * The default mock port is 3000 rather than an arbitrary one: it is the port
  * `config.apiUrl` already falls back to on Android (`http://10.0.2.2:3000`),
@@ -60,7 +60,7 @@ function parseArgs(argv) {
     flowsDir: path.join(__dirname, 'flows'),
     out: path.join(__dirname, 'artifacts'),
     report: path.join(__dirname, 'report'),
-    reconnectDelayMs: 60000,
+    reconnectDelayMs: 120000,
     only: [],
   };
 
@@ -165,30 +165,38 @@ function readAirplaneMode(deviceSerial) {
 }
 
 /**
- * Toggles airplane mode and confirms the device actually changed state.
+ * Takes the device offline (or brings it back) and confirms it changed state.
  *
- * `cmd connectivity airplane-mode` only exists on newer Android releases; on
- * older ones (API 27, the CI profile) `cmd` exits successfully after printing
- * "No shell command implementation.", so the exit code alone says nothing
- * about whether the radio state changed. The setting is therefore always read
- * back, and the settings-write + broadcast fallback is applied whenever the
- * modern subcommand did not take effect. Without this, an offline flow runs
- * against a connected device and every offline assertion fails.
+ * Every command is applied on every call — the modern `cmd connectivity
+ * airplane-mode` subcommand *and* the `svc` fallback — rather than only
+ * falling back when a read-back disagrees. The read-back is exactly the trap
+ * the first CI run fell into: `cmd connectivity airplane-mode` exits zero on
+ * API 27 after printing "No shell command implementation.", and the setting
+ * write that followed makes `airplane_mode_on` read `1` while the radio stays
+ * up, so the check passed, the fallback was skipped, and the offline flows ran
+ * against a connected device. The commands are idempotent, so running them all
+ * is safe and removes that false confirmation.
+ *
+ * The read-back is still used, but only to report what the device says.
+ *
+ * @param {string|undefined} deviceSerial
+ * @param {boolean} enable
+ * @returns {Promise<boolean>} whether the airplane-mode setting matches the request
  */
 async function setAirplaneMode(deviceSerial, enable) {
   const { primary, fallback } = airplaneModeCommands(enable);
-  const expected = enable ? '1' : '0';
 
   adbTry(primary, deviceSerial);
-  if (readAirplaneMode(deviceSerial) !== expected) {
-    for (const command of fallback) {
-      adbTry(command, deviceSerial);
-    }
-    // The broadcast is handled asynchronously; give it time to land before
-    // deciding whether the toggle worked.
-    await sleepMs(2000);
+  for (const command of fallback) {
+    adbTry(command, deviceSerial);
   }
 
+  // Bringing a transport up/down is asynchronous, and NetInfo observes it
+  // through a platform callback; give the transition time to land before the
+  // flow starts (or before connectivity is considered restored).
+  await sleepMs(enable ? 3000 : 2000);
+
+  const expected = enable ? '1' : '0';
   const state = readAirplaneMode(deviceSerial);
   if (state === expected) {
     console.log(`[e2e] airplane mode ${enable ? 'enabled' : 'disabled'}`);
@@ -314,9 +322,8 @@ async function runFlow({ args, flow, deviceSerial, skipNetwork }) {
       await setAirplaneMode(deviceSerial, false);
     }
     if (flow.network === 'offline' || flow.network === 'reconnect') {
+      // setAirplaneMode waits for the transition to settle before returning.
       await setAirplaneMode(deviceSerial, true);
-      // Let NetInfo observe the transition before the flow launches.
-      await sleepMs(3000);
     }
   }
 
@@ -433,7 +440,7 @@ async function main() {
       await mockBackend.close();
     }
     if (!args.skipNetwork) {
-      // Never leave CI's emulator stranded in airplane mode.
+      // Never leave CI's emulator stranded offline.
       await setAirplaneMode(args.device, false);
     }
   }

@@ -10,9 +10,11 @@ describe('run-e2e parseArgs', () => {
     // EXPO_PUBLIC_API_URL.
     expect(args.apiPort).toBe(3000);
     expect(args.maestro).toBe('maestro');
-    // Long enough for the reconnect flow to finish its offline assertions
-    // before the harness restores connectivity.
-    expect(args.reconnectDelayMs).toBe(60000);
+    // Long enough for the reconnect flow to cold-start, queue its upload and
+    // finish its offline assertions before the harness restores connectivity
+    // (restoring too early makes the app upload live and the flow's
+    // "Upload queued…" assertion fail).
+    expect(args.reconnectDelayMs).toBe(120000);
     expect(args.only).toEqual([]);
     expect(args.noInstall).toBeUndefined();
     expect(args.skipNetwork).toBeUndefined();
